@@ -22,7 +22,7 @@ socketio = SocketIO(app)
 # Global variables to track WebUI state
 _webui_thread = None
 _webui_running = False
-_webui_host = '127.0.0.1'
+_webui_host = '0.0.0.0'
 _webui_port = 5000
 _restart_requested = False
 _restart_lock = threading.Lock()
