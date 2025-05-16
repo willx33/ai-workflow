@@ -37,7 +37,12 @@ def github_repo():
 def xml_parser():
     """Render the XML parser page."""
     return render_template('xml_parser.html')
-    
+
+@app.route('/remote-client')
+def remote_client():
+    """Render the remote client page for accessing files directly from the client machine."""
+    return render_template('remote_client.html')
+
 @app.route('/settings')
 def settings():
     """Render the settings page."""

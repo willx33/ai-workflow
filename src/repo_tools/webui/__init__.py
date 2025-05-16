@@ -11,13 +11,15 @@ import time
 import signal
 from flask import Flask, render_template
 from flask_socketio import SocketIO
+from flask_cors import CORS
 from pathlib import Path
 from rich.console import Console
 
 console = Console()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app)
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Global variables to track WebUI state
 _webui_thread = None

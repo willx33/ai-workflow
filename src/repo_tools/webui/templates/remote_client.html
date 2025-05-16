@@ -1,0 +1,507 @@
+{% extends "base.html" %}
+
+{% block title %}Repo Tools - Remote Client{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>🌐 Remote Client Connection</h2>
+    <p>Access files from your current device instead of the server</p>
+</div>
+
+<div class="workflow-container">
+    <div class="workflow-step" id="step-client-connect">
+        <h3>📂 Select Files From Your Device</h3>
+        <div class="form-group">
+            <p>This tool allows you to browse and select repositories directly from your current device rather than from the server.</p>
+            
+            <div class="button-group">
+                <button id="browse-button" class="btn btn-blue">Select Repository Folder</button>
+                <input type="file" id="directory-input" webkitdirectory directory multiple style="display: none;" />
+            </div>
+        </div>
+        <div id="custom-path" class="custom-path hidden">
+            <div class="path-header">
+                <p class="selected-path-label">Selected directory:</p>
+                <button id="clear-path-button" class="clear-path-btn" title="Clear selection">×</button>
+            </div>
+            <p id="selected-path-display" class="selected-path"></p>
+            <p class="path-info">Any git repositories inside this directory will be detected and processed directly in your browser.</p>
+        </div>
+        <div id="path-loading" class="loading-indicator hidden">
+            <div class="spinner"></div>
+            <p>Scanning for repositories...</p>
+        </div>
+    </div>
+    
+    <div class="workflow-step hidden" id="step-repo-select">
+        <h3>🔍 Step 2: Select Repositories</h3>
+        <div class="form-group">
+            <label>Select repositories to process:</label>
+            <div id="repo-checklist" class="checklist"></div>
+            <div class="selection-count">
+                <span id="selection-count">0</span> repositories selected
+            </div>
+            <div class="button-group">
+                <button id="load-repos-button" class="btn btn-green">Process Selected Repositories</button>
+                <button id="back-to-path-button" class="btn btn-orange">Back to Directory Selection</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="workflow-step hidden" id="step-file-select">
+        <h3>📄 Step 3: Select Files</h3>
+        <div class="repo-controls">
+            <button id="back-to-select-button" class="btn btn-orange">Back to Repository Selection</button>
+            <button id="refresh-button" class="btn">Refresh Files</button>
+            <button id="copy-button" class="btn btn-green">Copy Selected Files</button>
+        </div>
+        
+        <div id="repo-loading" class="loading-indicator hidden">
+            <div class="spinner"></div>
+            <p>Loading repository files...</p>
+        </div>
+        
+        <div id="repo-container" class="hidden">
+            <div class="tabs">
+                <button class="tab-button active" id="included-tab">Included Files</button>
+                <button class="tab-button" id="ignored-tab">Ignored Files</button>
+            </div>
+            
+            <div class="tab-content active" id="included-content">
+                <div class="search-container">
+                    <input type="text" id="tree-search" placeholder="Search for files...">
+                    <button id="tree-search-clear" title="Clear search">×</button>
+                </div>
+                <div id="file-tree" class="file-tree"></div>
+            </div>
+            
+            <div class="tab-content" id="ignored-content">
+                <div class="search-container">
+                    <input type="text" id="ignored-tree-search" placeholder="Search for files...">
+                    <button id="ignored-tree-search-clear" title="Clear search">×</button>
+                </div>
+                <p class="ignored-files-info">These files are excluded by default due to common ignore patterns.</p>
+                <div id="ignored-file-tree" class="file-tree"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="file-preview-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="preview-filename">File Preview</h3>
+            <button id="file-preview-close" class="modal-close">&times;</button>
+        </div>
+        <div id="file-preview-container">
+            <pre id="file-preview-content"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // DOM elements
+        const browseButton = document.getElementById('browse-button');
+        const directoryInput = document.getElementById('directory-input');
+        const customPath = document.getElementById('custom-path');
+        const selectedPathDisplay = document.getElementById('selected-path-display');
+        const pathLoading = document.getElementById('path-loading');
+        const clearPathButton = document.getElementById('clear-path-button');
+        
+        const stepClientConnect = document.getElementById('step-client-connect');
+        const stepRepoSelect = document.getElementById('step-repo-select');
+        const stepFileSelect = document.getElementById('step-file-select');
+        
+        const repoChecklist = document.getElementById('repo-checklist');
+        const selectionCount = document.getElementById('selection-count');
+        const loadReposButton = document.getElementById('load-repos-button');
+        const backToPathButton = document.getElementById('back-to-path-button');
+        
+        const repoContainer = document.getElementById('repo-container');
+        const repoLoading = document.getElementById('repo-loading');
+        const backToSelectButton = document.getElementById('back-to-select-button');
+        const refreshButton = document.getElementById('refresh-button');
+        const copyButton = document.getElementById('copy-button');
+        
+        // Variables to store state
+        let availableRepos = [];
+        let selectedRepoIds = [];
+        let selectedRepos = [];
+        let fileTreeData = [];
+        let ignoredTreeData = [];
+        let windowPath = '';
+        
+        // Handle directory selection via file browser
+        browseButton.addEventListener('click', () => {
+            pathLoading.classList.remove('hidden');
+            pathLoading.querySelector('p').textContent = 'Waiting for directory selection...';
+            
+            window.waitingForFileSelection = true;
+            directoryInput.click();
+            
+            window.addEventListener('focus', function onFocus() {
+                setTimeout(() => {
+                    if (window.waitingForFileSelection && customPath.classList.contains('hidden')) {
+                        pathLoading.classList.add('hidden');
+                        window.waitingForFileSelection = false;
+                    }
+                }, 300);
+                
+                window.removeEventListener('focus', onFocus);
+            });
+        });
+        
+        directoryInput.addEventListener('change', handleDirectorySelection);
+        
+        // Handle repository loading
+        loadReposButton.addEventListener('click', loadSelectedRepositories);
+        backToPathButton.addEventListener('click', backToPathSelection);
+        backToSelectButton.addEventListener('click', backToRepoSelect);
+        
+        // Handle directory selection
+        function handleDirectorySelection(e) {
+            window.waitingForFileSelection = false;
+            
+            if (e.target.files.length > 0) {
+                const files = e.target.files;
+                const dirName = files[0].webkitRelativePath.split('/')[0];
+                
+                selectedPathDisplay.textContent = `📂 ${dirName}`;
+                customPath.classList.remove('hidden');
+                
+                browseButton.disabled = true;
+                
+                pathLoading.classList.remove('hidden');
+                pathLoading.querySelector('p').textContent = 'Finding repositories in selected directory...';
+                
+                setTimeout(() => {
+                    const foundRepos = findGitReposInFiles(files);
+                    
+                    pathLoading.classList.add('hidden');
+                    
+                    if (foundRepos.length > 0) {
+                        processFoundRepositories(foundRepos, dirName);
+                    } else {
+                        showNotification(`No Git repositories found in "${dirName}"`, 'warning');
+                    }
+                }, 100);
+            }
+        }
+        
+        function findGitReposInFiles(files) {
+            const repos = [];
+            const repoMap = new Map();
+            
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const path = file.webkitRelativePath;
+                const pathParts = path.split('/');
+                
+                if (path.includes('/.git/') || path.endsWith('/.git')) {
+                    const gitDirIndex = pathParts.findIndex(part => part === '.git');
+                    if (gitDirIndex > 0) {
+                        const repoPathParts = pathParts.slice(0, gitDirIndex);
+                        const repoPath = repoPathParts.join('/');
+                        const repoName = repoPathParts[repoPathParts.length - 1];
+                        
+                        if (!repoMap.has(repoPath)) {
+                            repoMap.set(repoPath, {
+                                id: `repo-${repos.length}`,
+                                name: repoName,
+                                path: repoPath,
+                                files: new Set()
+                            });
+                        }
+                    }
+                }
+            }
+            
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const path = file.webkitRelativePath;
+                
+                for (const [repoPath, repo] of repoMap.entries()) {
+                    if (path.startsWith(repoPath + '/')) {
+                        repo.files.add(file);
+                        break;
+                    }
+                }
+            }
+            
+            repoMap.forEach(repo => {
+                repos.push(repo);
+            });
+            
+            return repos;
+        }
+        
+        function processFoundRepositories(repos, dirName) {
+            availableRepos = repos;
+            
+            repoChecklist.innerHTML = '';
+            
+            selectedRepoIds = [];
+            updateSelectionCount();
+            
+            renderRepositoryList();
+            
+            if (availableRepos.length > 0) {
+                showNotification(`Found ${repos.length} repositories in "${dirName}"`, 'success');
+                
+                stepClientConnect.classList.add('disabled');
+                stepRepoSelect.classList.remove('hidden');
+            }
+        }
+        
+        function renderRepositoryList() {
+            repoChecklist.innerHTML = '';
+            
+            availableRepos.forEach(repo => {
+                const checkboxItem = document.createElement('div');
+                checkboxItem.className = 'checkbox-item';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = repo.id;
+                checkbox.checked = selectedRepoIds.includes(repo.id);
+                
+                checkbox.addEventListener('change', function() {
+                    if (this.checked) {
+                        selectedRepoIds.push(repo.id);
+                    } else {
+                        selectedRepoIds = selectedRepoIds.filter(id => id !== repo.id);
+                    }
+                    updateSelectionCount();
+                });
+                
+                const label = document.createElement('label');
+                label.htmlFor = repo.id;
+                label.textContent = `${repo.name} (${repo.path})`;
+                
+                checkboxItem.appendChild(checkbox);
+                checkboxItem.appendChild(label);
+                repoChecklist.appendChild(checkboxItem);
+            });
+        }
+        
+        function updateSelectionCount() {
+            selectionCount.textContent = selectedRepoIds.length;
+            loadReposButton.disabled = selectedRepoIds.length === 0;
+        }
+        
+        function backToPathSelection() {
+            stepRepoSelect.classList.add('hidden');
+            stepClientConnect.classList.remove('disabled');
+        }
+        
+        function backToRepoSelect() {
+            stepFileSelect.classList.add('hidden');
+            stepRepoSelect.classList.remove('hidden');
+        }
+        
+        function loadSelectedRepositories() {
+            // Get selected repos
+            const reposToLoad = availableRepos.filter(repo => selectedRepoIds.includes(repo.id));
+            
+            // Reset selection data
+            selectedRepos = [];
+            fileTreeData = [];
+            ignoredTreeData = [];
+            
+            // Show loading indicator
+            repoLoading.classList.remove('hidden');
+            stepRepoSelect.classList.add('disabled');
+            stepFileSelect.classList.remove('hidden');
+            repoContainer.classList.add('hidden');
+            
+            // Track loading progress
+            let loadedCount = 0;
+            const totalToLoad = reposToLoad.length;
+            
+            // Process each selected repository
+            reposToLoad.forEach(repo => {
+                setTimeout(() => {
+                    try {
+                        if (repo.files && repo.files.size > 0) {
+                            processRepositoryFiles(repo, (processedRepo) => {
+                                selectedRepos.push(processedRepo);
+                                
+                                const repoTreeData = buildFileTree(processedRepo.included, processedRepo.name, false);
+                                fileTreeData.push(repoTreeData);
+                                
+                                const repoIgnoredTreeData = buildFileTree(
+                                    processedRepo.ignored.map(path => ({ path, content: "" })), 
+                                    processedRepo.name, 
+                                    true
+                                );
+                                ignoredTreeData.push(repoIgnoredTreeData);
+                                
+                                loadedCount++;
+                                if (loadedCount === totalToLoad) {
+                                    finishLoading();
+                                }
+                            });
+                        }
+                    } catch (error) {
+                        console.error(`Error processing repository ${repo.name}:`, error);
+                        showNotification(`Error processing ${repo.name}: ${error.message}`, 'error');
+                        
+                        loadedCount++;
+                        if (loadedCount === totalToLoad) {
+                            finishLoading();
+                        }
+                    }
+                }, 100);
+            });
+        }
+        
+        function finishLoading() {
+            // Hide loading indicator
+            repoLoading.classList.add('hidden');
+            
+            // Show file tree UI
+            repoContainer.classList.remove('hidden');
+            
+            // Render file trees
+            renderFileTrees();
+        }
+        
+        function processRepositoryFiles(repo, callback) {
+            const files = Array.from(repo.files);
+            const includedFiles = [];
+            const ignoredFiles = [];
+            
+            // Rules for files to ignore
+            const ignorePatterns = [
+                /node_modules/,
+                /\.git\//,
+                /venv\//,
+                /virtualenv\//,
+                /\.venv\//,
+                /env\//,
+                /\.env\//,
+                /\.DS_Store/,
+                /\.class$/,
+                /\.pyc$/,
+                /\.pyo$/,
+                /\.log$/,
+                /\.svg$/,
+                /\.jpg$/,
+                /\.jpeg$/,
+                /\.png$/,
+                /\.gif$/,
+                /\.ico$/,
+                /\.pdf$/
+            ];
+            
+            // Filter out directories
+            const filesToProcess = files.filter(file => !file.webkitRelativePath.endsWith('/'));
+            const totalFiles = filesToProcess.length;
+            let processedCount = 0;
+            
+            // Update loading display
+            function updateLoadingProgress() {
+                if (repoLoading && repoLoading.querySelector('p')) {
+                    const progress = Math.round((processedCount / totalFiles) * 100);
+                    repoLoading.querySelector('p').textContent = 
+                        `Processing ${repo.name}: ${progress}% (${processedCount}/${totalFiles} files)`;
+                }
+            }
+            
+            // Process files in batches
+            const processNextBatch = (startIndex, batchSize) => {
+                const endIndex = Math.min(startIndex + batchSize, filesToProcess.length);
+                
+                for (let i = startIndex; i < endIndex; i++) {
+                    const file = filesToProcess[i];
+                    const path = file.webkitRelativePath;
+                    
+                    // Check if file should be ignored
+                    const shouldIgnore = ignorePatterns.some(pattern => pattern.test(path));
+                    
+                    if (shouldIgnore) {
+                        // Add to ignored files
+                        ignoredFiles.push(path);
+                    } else {
+                        // Read file content and add to included files
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            const content = e.target.result;
+                            includedFiles.push({
+                                path: path,
+                                content: content
+                            });
+                        };
+                        reader.readAsText(file);
+                    }
+                    
+                    processedCount++;
+                }
+                
+                updateLoadingProgress();
+                
+                // Process next batch or finish
+                if (endIndex < filesToProcess.length) {
+                    setTimeout(() => {
+                        processNextBatch(endIndex, batchSize);
+                    }, 0);
+                } else {
+                    // Small delay to ensure all FileReader operations complete
+                    setTimeout(() => {
+                        const processedRepo = {
+                            name: repo.name,
+                            path: repo.path,
+                            included: includedFiles,
+                            ignored: ignoredFiles
+                        };
+                        callback(processedRepo);
+                    }, 500);
+                }
+            };
+            
+            // Start processing first batch
+            processNextBatch(0, 50);
+        }
+        
+        function buildFileTree(files, repoName, isIgnored) {
+            // Implementation will depend on your file tree UI
+            // This is a simplified placeholder
+            return {
+                name: repoName,
+                isRepo: true,
+                children: [],
+                files: files,
+                isIgnored: isIgnored
+            };
+        }
+        
+        function renderFileTrees() {
+            // Implementation will depend on your file tree UI
+            // This is a placeholder
+            console.log('File trees ready to render:', fileTreeData, ignoredTreeData);
+        }
+        
+        // Utility for showing notifications
+        function showNotification(message, type = 'info') {
+            // Simple alert for now
+            alert(message);
+        }
+        
+        // Clear path button
+        clearPathButton.addEventListener('click', function() {
+            customPath.classList.add('hidden');
+            selectedPathDisplay.textContent = '';
+            browseButton.disabled = false;
+            
+            if (!stepRepoSelect.classList.contains('hidden')) {
+                stepRepoSelect.classList.add('hidden');
+                stepClientConnect.classList.remove('disabled');
+            }
+            
+            showNotification('Directory selection cleared', 'info');
+            directoryInput.value = '';
+        });
+    });
+</script>
+{% endblock %} 
